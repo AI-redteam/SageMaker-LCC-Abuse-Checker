@@ -5,6 +5,7 @@ import boto3
 import base64
 import json
 import re
+from botocore.exceptions import ClientError
 
 # ANSI color codes for formatted output
 class colors:
@@ -47,6 +48,15 @@ class SageMakerScanner:
         self.sagemaker_client = boto3.client('sagemaker', region_name=region)
         self.iam_client = boto3.client('iam', region_name=region)
 
+    def _handle_permission_error(self, e, check_name):
+        """Handles IAM permission errors gracefully."""
+        if e.response['Error']['Code'] == 'AccessDeniedException':
+            print(f"{colors.FAIL}[ERROR] Access Denied for '{check_name}'. Skipping this check.{colors.ENDC}")
+            print(f"    {colors.BOLD}Details:{colors.ENDC} The IAM role running this script is missing required permissions.")
+            print(f"    {colors.BOLD}Remediation:{colors.ENDC} Please attach a policy with the necessary read permissions as outlined in the README.md.\n")
+        else:
+            print(f"{colors.FAIL}An unexpected error occurred during '{check_name}': {e}{colors.ENDC}")
+            
     def check_notebook_root_access(self):
         """
         Checks all SageMaker notebook instances for enabled root access.
@@ -71,8 +81,10 @@ class SageMakerScanner:
                         )
             if not found_vuln:
                 print(f"{colors.OKGREEN}[INFO] No notebook instances found with root access enabled.{colors.ENDC}")
+        except ClientError as e:
+            self._handle_permission_error(e, "Notebook Root Access Check")
         except Exception as e:
-            print(f"{colors.FAIL}Error checking notebook root access: {e}{colors.ENDC}")
+            print(f"{colors.FAIL}An unexpected error occurred checking notebook root access: {e}{colors.ENDC}")
 
     def check_lcc_scripts(self):
         """
@@ -118,9 +130,10 @@ class SageMakerScanner:
                                     )
             if not found_suspicious_notebook_lcc:
                  print(f"{colors.OKGREEN}[INFO] No suspicious content found in Notebook LCCs.{colors.ENDC}")
-
+        except ClientError as e:
+            self._handle_permission_error(e, "Notebook LCC Scan")
         except Exception as e:
-            print(f"{colors.FAIL}Error scanning notebook LCCs: {e}{colors.ENDC}")
+            print(f"{colors.FAIL}An unexpected error occurred scanning notebook LCCs: {e}{colors.ENDC}")
             
         # Scan Studio LCCs
         print_heading("Scanning Studio LCCs for Suspicious Content")
@@ -145,9 +158,10 @@ class SageMakerScanner:
                             )
             if not found_suspicious_studio_lcc:
                 print(f"{colors.OKGREEN}[INFO] No suspicious content found in Studio LCCs.{colors.ENDC}")
-
+        except ClientError as e:
+            self._handle_permission_error(e, "Studio LCC Scan")
         except Exception as e:
-            print(f"{colors.FAIL}Error scanning Studio LCCs: {e}{colors.ENDC}")
+            print(f"{colors.FAIL}An unexpected error occurred scanning Studio LCCs: {e}{colors.ENDC}")
 
     def check_sagemaker_roles(self):
         """
@@ -172,8 +186,10 @@ class SageMakerScanner:
             if not found_vuln:
                 print(f"{colors.OKGREEN}[INFO] No active notebook instances found to analyze roles.{colors.ENDC}")
 
+        except ClientError as e:
+            self._handle_permission_error(e, "IAM Role Analysis")
         except Exception as e:
-            print(f"{colors.FAIL}Error checking SageMaker roles: {e}{colors.ENDC}")
+            print(f"{colors.FAIL}An unexpected error occurred checking SageMaker roles: {e}{colors.ENDC}")
 
     def _check_single_role(self, role_name):
         """Helper function to analyze policies for a single IAM role."""
@@ -207,8 +223,11 @@ class SageMakerScanner:
                 policy_document = self.iam_client.get_role_policy(RoleName=role_name, PolicyName=policy_name)['PolicyDocument']
                 self._analyze_policy_document(role_name, policy_name, policy_document, high_risk_permissions)
 
+        except ClientError as e:
+             self._handle_permission_error(e, f"IAM Policy Analysis for role '{role_name}'")
         except Exception as e:
              print(f"{colors.FAIL}Could not analyze role '{role_name}': {e}{colors.ENDC}")
+
 
     def _analyze_policy_document(self, role_name, policy_name, document, risk_map):
         """Analyzes a policy document for high-risk permissions."""
